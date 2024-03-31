@@ -90,13 +90,19 @@ __all__ = [
     'using_numpy',
 ]
 
-from abc import ABCMeta, abstractmethod
 import random
+from abc import ABCMeta, abstractmethod
+from typing import TypeVar, Iterator, overload, Any, Sequence, Union, Optional, Type
 
 import xcs
+from .base import Vector, VectorCondition
+
+_Self = TypeVar('_Self', bound='BitStringBase')
+
+BitString: 'Type[BitStringBase]'
 
 
-def numpy_is_available():
+def numpy_is_available() -> bool:
     """Return a Boolean indicating whether numpy can be imported.
 
     Usage:
@@ -115,7 +121,7 @@ def numpy_is_available():
 #   a rather ugly solution, but _numpy_bitstrings.py and
 #   _python_bitstrings.py import this module, and then this module imports
 #   one of them. This lets us switch back and forth as needed.
-class BitStringBase(metaclass=ABCMeta):
+class BitStringBase(Vector[bool], metaclass=ABCMeta):
     """Abstract base class for hashable, immutable sequences of bits
     (Boolean values). There are two separate implementations of the
     BitString class, each of which inherits from this base class. One is
@@ -137,7 +143,7 @@ class BitStringBase(metaclass=ABCMeta):
 
     @classmethod
     @abstractmethod
-    def random(cls, length, bit_prob=.5):
+    def random(cls: type[_Self], length: int, bit_prob: float = .5) -> _Self:
         """Create a bit string of the given length, with the probability of
         each bit being set equal to bit_prob, which defaults to .5.
 
@@ -159,7 +165,7 @@ class BitStringBase(metaclass=ABCMeta):
 
     @classmethod
     @abstractmethod
-    def crossover_template(cls, length, points=2):
+    def crossover_template(cls: type[_Self], length: int, points: int = 2) -> _Self:
         """Create a crossover template with the given number of points. The
         crossover template can be used as a mask to crossover two
         bitstrings of the same length.
@@ -180,14 +186,14 @@ class BitStringBase(metaclass=ABCMeta):
         """
         raise NotImplementedError()
 
-    def __init__(self, bits, hash_value):
-        assert hash_value is None or isinstance(hash_value, int)
+    def __bool__(self) -> bool:
+        return self.any()
 
-        self._bits = bits
-        self._hash = hash_value
+    def nonzero(self: _Self) -> _Self:
+        return self
 
     @abstractmethod
-    def any(self):
+    def any(self) -> bool:
         """Returns True iff at least one bit is set.
 
         Usage:
@@ -201,7 +207,7 @@ class BitStringBase(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def count(self):
+    def count(self, value: bool = True) -> int:
         """Returns the number of bits set to True in the bit string.
 
         Usage:
@@ -213,71 +219,86 @@ class BitStringBase(metaclass=ABCMeta):
         """
         raise NotImplementedError()
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Overloads str(bitstring)"""
         return ''.join('1' if bit else '0' for bit in self)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Overloads repr(bitstring)"""
         return type(self).__name__ + '(' + repr(str(self)) + ')'
 
     @abstractmethod
-    def __int__(self):
+    def __int__(self) -> int:
         """Overloads int(instance)"""
         raise NotImplementedError()
 
     @abstractmethod
-    def __len__(self):
+    def __len__(self) -> int:
         """Overloads len(instance)"""
         raise NotImplementedError()
 
     @abstractmethod
-    def __iter__(self):
+    def __iter__(self) -> Iterator[bool]:
         """Overloads iter(instance)"""
         raise NotImplementedError()
+
+    @overload
+    def __getitem__(self, index: int) -> bool: ...
+
+    @overload
+    def __getitem__(self: _Self, indices: slice) -> _Self: ...
 
     @abstractmethod
     def __getitem__(self, index):
         raise NotImplementedError()
 
     @abstractmethod
-    def __hash__(self):
+    def __hash__(self) -> int:
         """Overloads hash(instance)"""
         raise NotImplementedError()
 
     @abstractmethod
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         """Overloads instance1 == instance2"""
         raise NotImplementedError()
 
-    def __ne__(self, other):
+    def __ne__(self, other: Any) -> bool:
         """Overloads !="""
         return not self == other
 
     @abstractmethod
-    def __and__(self, other):
+    def __and__(self: _Self, other: Sequence[bool]) -> _Self:
         """Overloads instance1 & instance2"""
         raise NotImplementedError()
 
     @abstractmethod
-    def __or__(self, other):
+    def __or__(self: _Self, other: Sequence[bool]) -> _Self:
         """Overloads instance1 | instance2"""
         raise NotImplementedError()
 
     @abstractmethod
-    def __xor__(self, other):
+    def __xor__(self: _Self, other: Sequence[bool]) -> _Self:
         """Overloads instance1 ^ instance2"""
         raise NotImplementedError()
 
     @abstractmethod
-    def __invert__(self):
+    def __invert__(self: _Self) -> _Self:
         """Overloads ~instance"""
         raise NotImplementedError()
 
     @abstractmethod
-    def __add__(self, other):
-        """Overloads instance1 + instance2"""
+    def concat(self: _Self, other: 'Sequence[bool]') -> _Self:
         raise NotImplementedError()
+
+    def get_configuration(self) -> dict[str, Any]:
+        config = super().get_configuration()
+        assert 'values' not in config
+        config['values'] = str(self)
+        return config
+
+    def configure(self, config: dict[str, Any]) -> None:
+        super().configure(config)
+        assert str(self) == config['values']
 
 
 # There are two different implementations of BitString, one in
@@ -288,10 +309,10 @@ class BitStringBase(metaclass=ABCMeta):
 # external dependencies. The user can override this behavior, if desired,
 # by calling use_numpy().
 from ._python_bitstrings import BitString
-_using_numpy = False
+_using_numpy: bool = False
 
 
-def using_numpy():
+def using_numpy() -> bool:
     """Return a Boolean indicating whether the numpy implementation is
     currently in use.
 
@@ -307,7 +328,7 @@ def using_numpy():
     return _using_numpy
 
 
-def use_numpy():
+def use_numpy() -> None:
     """Force the package to use the numpy-based BitString implementation.
     If numpy is not available, this will result in an ImportError.
     IMPORTANT: Bitstrings of different implementations cannot be mixed.
@@ -320,12 +341,13 @@ def use_numpy():
     Arguments: None
     Return: None
     """
+    # noinspection PyGlobalUndefined
     global BitString, _using_numpy
     from ._numpy_bitstrings import BitString
     _using_numpy = True
 
 
-def use_pure_python():
+def use_pure_python() -> None:
     """Force the package to use the pure Python BitString implementation.
     IMPORTANT: Bitstrings of different implementations cannot be mixed.
     Attempting to do so will result in undefined behavior.
@@ -337,12 +359,13 @@ def use_pure_python():
     Arguments: None
     Return: None
     """
+    # noinspection PyGlobalUndefined
     global BitString, _using_numpy
     from ._python_bitstrings import BitString
     _using_numpy = False
 
 
-class BitCondition:
+class BitCondition(VectorCondition[bool]):
     """A pair of bit strings, one indicating the bit values, and the other
     indicating the bit mask, which together act as a matching template for
     bit strings. Like bit strings, bit conditions are hashable and
@@ -451,8 +474,11 @@ class BitCondition:
             having the same length as the sequence provided for bits.
     """
 
+    _bits: BitString
+    _mask: BitString
+
     @classmethod
-    def cover(cls, bits, wildcard_probability):
+    def cover(cls, bits: Sequence[bool], wildcard_probability: float) -> 'BitCondition':
         """Create a new bit condition that matches the provided bit string,
         with the indicated per-index wildcard probability.
 
@@ -478,6 +504,12 @@ class BitCondition:
         ])
 
         return cls(bits, mask)
+
+    @overload
+    def __init__(self, bits: 'Union[str, BitCondition]'): ...
+
+    @overload
+    def __init__(self, bits: Sequence[bool], mask: Sequence[bool] = None): ...
 
     def __init__(self, bits, mask=None):
         if mask is None:
@@ -510,8 +542,10 @@ class BitCondition:
         else:
             if not isinstance(bits, BitString):
                 bits = BitString(bits)
-            if not isinstance(mask, BitString):
+            if isinstance(mask, BitString):
                 mask = BitString(mask)
+            elif mask is None:
+                mask = bits | ~bits
             hash_value = None
 
         assert len(bits) == len(mask)
@@ -521,19 +555,19 @@ class BitCondition:
         self._hash = hash_value
 
     @property
-    def bits(self):
+    def bits(self) -> BitString:
         """The bit string indicating the bit values of this bit condition.
         Indices that are wildcarded will have a value of False."""
         return self._bits
 
     @property
-    def mask(self):
+    def mask(self) -> BitString:
         """The bit string indicating the bit mask. A value of 1 for a
         bit indicates it must match the value bit string. A value of 0
         indicates it is masked/wildcarded."""
         return self._mask
 
-    def count(self):
+    def count(self) -> int:
         """Return the number of bits that are not wildcards.
 
         Usage:
@@ -546,27 +580,36 @@ class BitCondition:
         """
         return self._mask.count()
 
-    def __str__(self):
+    def specificity(self) -> float:
+        return self.count()
+
+    def __str__(self) -> str:
         """Overloads str(condition)"""
         return ''.join(
             '1' if bit else ('#' if bit is None else '0')
             for bit in self
         )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Overloads repr(condition)"""
         return type(self).__name__ + '(' + repr(str(self)) + ')'
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Overloads len(condition)"""
         return len(self._bits)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Optional[bool]]:
         """Overloads iter(condition), and also, for bit in condition. The
         values yielded by the iterator are True (1), False (0), or
         None (#)."""
         for bit, mask in zip(self._bits, self._mask):
             yield bit if mask else None
+
+    @overload
+    def __getitem__(self, index: int) -> Optional[bool]: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> 'BitCondition': ...
 
     def __getitem__(self, index):
         """Overloads condition[index]. The values yielded by the index
@@ -575,28 +618,28 @@ class BitCondition:
             return BitCondition(self._bits[index], self._mask[index])
         return self._bits[index] if self._mask[index] else None
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         """Overloads hash(condition)."""
         # If we haven't already calculated the hash value, do so now.
         if self._hash is None:
             self._hash = hash(tuple(self))
         return self._hash
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         """Overloads =="""
         if not isinstance(other, BitCondition):
-            return False
+            return NotImplemented
         return (
             len(self._bits) == len(other._bits) and
             self._bits == other._bits and
             self._mask == other._mask
         )
 
-    def __ne__(self, other):
+    def __ne__(self, other: Any) -> bool:
         """Overloads !="""
         return not self == other
 
-    def __and__(self, other):
+    def __and__(self, other: 'BitCondition') -> 'BitCondition':
         """Overloads &"""
         if not isinstance(other, BitCondition):
             return NotImplemented
@@ -605,7 +648,7 @@ class BitCondition:
             self._mask | other._mask
         )
 
-    def __or__(self, other):
+    def __or__(self, other: 'BitCondition') -> 'BitCondition':
         """Overloads |"""
         if not isinstance(other, BitCondition):
             return NotImplemented
@@ -614,33 +657,27 @@ class BitCondition:
             self._mask & other._mask & ~(self._bits ^ other._bits)
         )
 
-    def __invert__(self):
+    def __invert__(self) -> 'BitCondition':
         """Overloads unary ~"""
         return type(self)(~self._bits, self._mask)
 
-    def __add__(self, other):
-        """Overloads +"""
+    def concat(self, other: 'BitCondition') -> 'BitCondition':
         if not isinstance(other, BitCondition):
             return NotImplemented
-        return type(self)(
-            self._bits + other._bits,
-            self._mask + other._mask
-        )
+        return type(self)(self._bits.concat(other._bits), self._mask.concat(other._mask))
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other: Union[Sequence[bool], 'BitCondition']) -> BitString:
         """Overloads the // operator, which we use to find the indices in
         the other value that do/can disagree with this condition."""
         if isinstance(other, BitCondition):
             return ((self._bits ^ other._bits) | ~other._mask) & self._mask
 
-        if isinstance(other, int):
-            other = BitString.from_int(other, len(self._bits))
-        elif not isinstance(other, BitString):
+        if not isinstance(other, BitString):
             other = BitString(other)
 
         return (self._bits ^ other) & self._mask
 
-    def __call__(self, other):
+    def __call__(self, other: 'Union[BitString, BitCondition]') -> bool:
         """Overloads condition(bitstring). Returns a Boolean value that
         indicates whether the other value satisfies this condition."""
 
@@ -649,7 +686,7 @@ class BitCondition:
         mismatches = self // other
         return not mismatches.any()
 
-    def crossover_with(self, other, points=2):
+    def crossover_with(self, other: 'BitCondition', points: int = 2) -> 'tuple[BitCondition, BitCondition]':
         """Perform 2-point crossover on this bit condition and another of
         the same length, returning the two resulting children.
 
@@ -680,3 +717,34 @@ class BitCondition:
 
         # Convert the modified sequences back into BitConditions
         return type(self)(bits1, mask1), type(self)(bits2, mask2)
+
+    def mutate(self, situation: 'Union[Sequence[bool], BitCondition]', mutation_probability: float) -> 'BitCondition':
+        # Go through each position in the condition, randomly flipping
+        # whether the position is a value (0 or 1) or a wildcard (#). We do
+        # this in a new list because the original condition's mask is
+        # immutable.
+        mutation_points = BitString.random(len(self.mask), mutation_probability)
+        mask = self.mask ^ mutation_points
+
+        # The bits that aren't wildcards always have the same value as the
+        # situation, which ensures that the mutated condition still matches
+        # the situation.
+        if isinstance(situation, BitCondition):
+            mask &= situation.mask
+            situation = situation.bits
+        return type(self)(situation, mask)
+
+    def get_configuration(self) -> dict[str, Any]:
+        config = super().get_configuration()
+        assert 'values' not in config
+        config['values'] = str(self)
+        return config
+
+    @classmethod
+    def build(cls, config: dict[str, Any]) -> 'BitCondition':
+        values = config['values']
+        return cls(values)
+
+    def configure(self, config: dict[str, Any]) -> None:
+        super().configure(config)
+        assert str(self) == config['values']

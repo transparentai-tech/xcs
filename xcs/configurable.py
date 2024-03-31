@@ -3,8 +3,11 @@ import importlib
 from typing import Any
 
 
+# TODO: Use a function registry for configuring classes that don't inherit from Configurable.
+
+
 def is_simple_literal(value) -> bool:
-    return value is None or isinstance(value, (bool, int, float, complex, str))
+    return value is None or isinstance(value, (bool, int, float, str))
 
 
 def get_type(module_name: str, class_name: str) -> type:

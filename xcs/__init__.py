@@ -154,7 +154,8 @@ else:
         numpy = None
 
 
-from . import bitstrings, scenarios
+from .conditions import bitstrings
+from . import scenarios
 from .framework import ActionSet, ClassifierRule, ClassifierSet, LCSAlgorithm, MatchSet
 from .algorithms.xcs import XCSClassifierRule, XCSAlgorithm
 from .testing import test

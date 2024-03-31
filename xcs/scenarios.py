@@ -274,7 +274,7 @@ class MUXProblem(Scenario):
             The current situation.
         """
         self.current_situation = bitstrings.BitString([
-            random.randrange(2)
+            bool(random.randrange(2))
             for _ in range(self.address_size + (1 << self.address_size))
         ])
         return self.current_situation
@@ -479,7 +479,7 @@ class ScenarioObserver(Scenario):
 
         if len(possible_actions) <= 20:
             # Try to ensure that the possible actions are unique. Also, put
-            # them into a list so we can iterate over them safely before
+            # them into a list, so we can iterate over them safely before
             # returning them; this avoids accidentally exhausting an
             # iterator, if the wrapped class happens to return one.
             try:

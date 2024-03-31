@@ -19,7 +19,7 @@
 Accuracy-based Classifier Systems for Python 3
 
 This xcs submodule provides a version of the BitString class, implemented
-using ordinary Python ints. Speed is comparable to numpy arrays.
+on top of numpy bool arrays.
 
 Do not access the contents of this module directly. See the documentation
 for xcs.bitstrings for a detailed explanation of how to properly access
@@ -65,15 +65,29 @@ __all__ = [
 ]
 
 import random
+from typing import overload, Sequence, Union, Iterator, Any, Callable
 
+# If numpy isn't installed, this will (intentionally) raise an ImportError
+import numpy
 
+from .base import default_vector_type
+
+# Sometimes numpy isn't uninstalled properly and what's left is an empty
+# folder. It's unusable, but still imports without error. This ensures we
+# don't take it for granted that the module is usable.
+try:
+    numpy.ndarray
+except AttributeError:
+    raise ImportError('The numpy module failed to uninstall properly.')
+
+# noinspection PyProtectedMember
 from .bitstrings import BitStringBase
 
 
+@default_vector_type(bool)
 class BitString(BitStringBase):
     """A hashable, immutable sequence of bits (Boolean values). Implemented
-    in pure Python, with no external dependencies. Speed is comparable to
-    numpy-based implementation.
+    on top of numpy arrays.
 
     Usage:
         # A few ways to create a BitString instance
@@ -100,7 +114,7 @@ class BitString(BitStringBase):
         # You can iterate over them
         for bit in bitstring1:
             if bit == 1:
-                print("Found one!)
+                print("Found one!")
 
         # They can be cast as ints
         assert int(bitstring2) == 134
@@ -146,9 +160,15 @@ class BitString(BitStringBase):
           then the length of the sequence must exactly equal length. If
           these length constraints are not met, a ValueError is raised.
     """
+    _storage_type = numpy.ndarray
+    _values: numpy.ndarray
+
+    @staticmethod
+    def _storage_type_cast(x: Sequence[bool]) -> numpy.ndarray:
+        return numpy.array(x, bool)
 
     @classmethod
-    def random(cls, length, bit_prob=.5):
+    def random(cls, length: int, bit_prob: float = .5) -> 'BitString':
         """Create a bit string of the given length, with the probability of
         each bit being set equal to bit_prob, which defaults to .5.
 
@@ -170,15 +190,17 @@ class BitString(BitStringBase):
         assert isinstance(length, int) and length >= 0
         assert isinstance(bit_prob, (int, float)) and 0 <= bit_prob <= 1
 
-        bits = 0
-        for _ in range(length):
-            bits <<= 1
-            bits += (random.random() < bit_prob)
+        bits = numpy.random.choice(
+            [False, True],
+            size=(length,),
+            p=[1-bit_prob, bit_prob]
+        )
+        bits.flags.writeable = False
 
-        return cls(bits, length)
+        return cls(bits)
 
     @classmethod
-    def crossover_template(cls, length, points=2):
+    def crossover_template(cls, length: int, points: int = 2) -> 'BitString':
         """Create a crossover template with the given number of points. The
         crossover template can be used as a mask to crossover two
         bitstrings of the same length.
@@ -212,62 +234,106 @@ class BitString(BitStringBase):
         # the selected crossover points.
         previous = 0
         include_range = bool(random.randrange(2))
-        bits = 0
+        pieces = []
         for point in points:
             if point > previous:
-                bits <<= point - previous
-                if include_range:
-                    bits += (1 << (point - previous)) - 1
+                fill: Callable = (numpy.ones if include_range else numpy.zeros)
+                pieces.append(fill(point - previous, dtype=bool))
             include_range = not include_range
             previous = point
+        bits = numpy.concatenate(pieces)
+        bits.flags.writeable = False
 
-        return cls(bits, length)
+        return cls(bits)
+
+    @overload
+    def __init__(self, bits: int, length: int): ...
+
+    @overload
+    def __init__(self, bits: Union[str, Sequence[bool]]): ...
 
     def __init__(self, bits, length=None):
-        if isinstance(bits, int):
+        if isinstance(bits, numpy.ndarray):
+            if bits.dtype == bool:
+                if bits.flags.writeable:
+                    # If it's writable, we need to make a copy
+                    bits = bits.copy()
+
+                    # Make sure our copy isn't writable
+                    bits.writeable = False
+            else:
+                # Make a new bit array from the given values
+                bits = numpy.array(bits, bool)
+
+                # Make sure the bit array isn't writable
+                bits.flags.writeable = False
+            hash_value = None
+        elif isinstance(bits, int):
             if length is None:
                 length = bits.bit_length()
             else:
                 assert length >= bits.bit_length()
+
             if bits < 0:
                 bits &= (1 << length) - 1
+
+            # Progressively chop off low-end bits from the int, adding them
+            # to the bits list, until we have reached the given length (if
+            # provided) or no more non-zero bits remain (if length was not
+            # specified).
+            bit_values = []
+            for _ in range(length):
+                bit_values.append(bits % 2)
+                bits >>= 1
+
+            # Reverse the order of the bits, so the high-order bits go on
+            # the left and the low-order bits go on the right, just as a
+            # person would expect when looking at the number written out in
+            # binary.
+            bit_values.reverse()
+            bits = numpy.array(bit_values, bool)
+
+            # Make sure the bit array isn't writable
+            bits.flags.writeable = False
+
             hash_value = None
         elif isinstance(bits, BitString):
             # No need to make a copy because we use immutable bit arrays
-            bits, length, hash_value = bits._bits, bits._length, bits._hash
+            # We can just grab a reference to the same bit array the other
+            # bitstring is using
+            bits, hash_value = bits._values, bits._hash
         elif isinstance(bits, str):
-            bit_str = bits
-            bits = 0
-            for char in bit_str:
-                bits <<= 1
+            bit_list = []
+            for char in bits:
                 if char == '1':
-                    bits += 1
+                    bit_list.append(True)
+                elif char == '0':
+                    bit_list.append(False)
+                elif char == '#':
+                    raise ValueError(
+                        "BitStrings cannot contain wildcards. Did you "
+                        "mean to create a BitCondition?"
+                    )
                 else:
-                    assert char == '0'
-            if length is None:
-                length = len(bit_str)
-            else:
-                assert length >= len(bit_str)
+                    raise ValueError("Invalid character: " + repr(char))
+            bits = numpy.array(bit_list, bool)
+            bits.flags.writeable = False
             hash_value = None
         else:
-            bit_sequence = bits
-            bits = 0
-            count = 0
-            for bit in bit_sequence:
-                count += 1
-                bits <<= 1
-                if bit:
-                    bits += 1
-            if length is None:
-                length = count
-            else:
-                assert length >= count
+            # Make a new bit array from the given values
+            bits = numpy.array(bits, bool)
+
+            # Make sure the bit array isn't writable
+            bits.flags.writeable = False
+
             hash_value = None
 
-        super().__init__(bits, hash_value)
-        self._length = length
+        if length is not None and len(bits) != length:
+            raise ValueError("Sequence has incorrect length.")
 
-    def any(self):
+        super().__init__(bits, hash_value)
+
+    def any(self) -> bool:
         """Returns True iff at least one bit is set.
 
         Usage:
@@ -278,9 +344,9 @@ class BitString(BitStringBase):
         Return:
             A bool indicating whether at least one bit has value 1.
         """
-        return bool(self._bits)
+        return bool(self._values.any())
 
-    def count(self):
+    def count(self, value: bool = True) -> int:
         """Returns the number of bits set to True in the bit string.
 
         Usage:
@@ -290,100 +356,108 @@ class BitString(BitStringBase):
         Return:
             An int, the number of bits with value 1.
         """
-        result = 0
-        bits = self._bits
-        while bits:
-            result += bits % 2
-            bits >>= 1
-        return result
+        true_count = int(numpy.count_nonzero(self._values))
+        return true_count if value else len(self) - true_count
 
-    def __int__(self):
+    def __int__(self) -> int:
         """Overloads int(bitstring)"""
-        return self._bits
+        value = 0
+        for bit in self._values:
+            value <<= 1
+            value += int(bit)
+        return value
 
-    def __len__(self):
-        """Overloads len(instance)"""
-        return self._length
+    def __len__(self) -> int:
+        """Overloads len(bitstring)"""
+        return len(self._values)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[bool]:
         """Overloads iter(bitstring), and also, for bit in bitstring"""
-        for index in range(self._length - 1, -1, -1):
-            yield (self._bits >> index) % 2
+        return iter(self._values)
+
+    @overload
+    def __getitem__(self, index: int) -> bool: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> 'BitString': ...
 
     def __getitem__(self, index):
         """Overloads bitstring[index]"""
+        result = self._values[index]
         if isinstance(index, slice):
-            start, stop, step = index.indices(self._length)
-            if start < 0:
-                return BitString(0, 0)
-            if step == -1:
-                step = 1
-                start, stop = stop, start
-            if step == 1:
-                length = stop - start
-                bits = ((self._bits >> (self._length - stop)) %
-                        (1 << length))
-                return BitString(bits, length)
-            else:
-                return BitString([
-                    self[point]
-                    for point in range(start, stop, step)
-                ])
+            result.flags.writeable = False
+            return BitString(result)
+        return result
 
-        assert isinstance(index, int)
-
-        if index >= 0:
-            assert index < self._length
-            return (self._bits >> (self._length - index - 1)) % 2
-        else:
-            assert -index <= self._length
-            return (self._bits >> (-index - 1)) % 2
-
-    def __hash__(self):
-        """Overloads hash(bitstring)"""
+    def __hash__(self) -> int:
+        """Overloads hash(bitstring)."""
+        # If the hash value hasn't already been calculated, do so now.
         if self._hash is None:
-            self._hash = hash(self._bits) ^ hash(self._length)
+            self._hash = hash(int(self)) ^ hash(len(self))
         return self._hash
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> bool:
         """Overloads =="""
         if not isinstance(other, BitString):
             return NotImplemented
-        return self._bits == other._bits and self._length == other._length
+        return numpy.array_equal(self._values, other._values)
 
-    def __and__(self, other):
+    def __and__(self, other: Sequence[bool]) -> 'BitString':
         """Overloads &"""
-        if isinstance(other, BitString):
-            assert self._length == other._length
-        else:
-            other = BitString(other, self._length)
-        return BitString(self._bits & other._bits, self._length)
-
-    def __or__(self, other):
-        """Overloads |"""
-        if isinstance(other, BitString):
-            assert self._length == other._length
-        else:
-            other = BitString(other, self._length)
-        return BitString(self._bits | other._bits, self._length)
-
-    def __xor__(self, other):
-        """Overloads ^"""
-        if isinstance(other, BitString):
-            assert self._length == other._length
-        else:
-            other = BitString(other, self._length)
-        return BitString(self._bits ^ other._bits, self._length)
-
-    def __invert__(self):
-        """Overloads unary ~"""
-        return BitString(~self._bits % (1 << self._length), self._length)
-
-    def __add__(self, other):
-        """Overloads +"""
-        if not isinstance(other, BitString):
+        if isinstance(other, int):
+            other = BitString(other, len(self._values))
+        elif not isinstance(other, BitString):
             other = BitString(other)
-        return BitString(
-            (self._bits << other._length) + other._bits,
-            self._length + other._length
-        )
+        bits = numpy.bitwise_and(self._values, other._values)
+
+        # Make sure the bit array isn't writable, so it can be used by the constructor
+        bits.flags.writeable = False
+
+        return type(self)(bits)
+
+    def __or__(self, other: Sequence[bool]) -> 'BitString':
+        """Overloads |"""
+        if isinstance(other, int):
+            other = BitString(other, len(self._values))
+        elif not isinstance(other, BitString):
+            other = BitString(other)
+        bits = numpy.bitwise_or(self._values, other._values)
+
+        # Make sure the bit array isn't writable, so it can be used by the constructor
+        bits.flags.writeable = False
+
+        return type(self)(bits)
+
+    def __xor__(self, other: Sequence[bool]) -> 'BitString':
+        """Overloads ^"""
+        if isinstance(other, int):
+            other = BitString(other, len(self._values))
+        elif not isinstance(other, BitString):
+            other = BitString(other)
+        bits = numpy.bitwise_xor(self._values, other._values)
+
+        # Make sure the bit array isn't writable, so it can be used by the constructor
+        bits.flags.writeable = False
+
+        return type(self)(bits)
+
+    def __invert__(self) -> 'BitString':
+        """Overloads unary ~"""
+        bits = numpy.bitwise_not(self._values)
+
+        # Make sure the bit array isn't writable, so it can be used by the constructor
+        bits.flags.writeable = False
+
+        return type(self)(bits)
+
+    def concat(self, other: Sequence[bool]) -> 'BitString':
+        if isinstance(other, int):
+            other = BitString(other, len(self._values))
+        elif not isinstance(other, BitString):
+            other = BitString(other)
+        bits = numpy.concatenate((self._values, other._values))
+
+        # Make sure the bit array isn't writable, so it can be used by the constructor
+        bits.flags.writeable = False
+
+        return type(self)(bits)
