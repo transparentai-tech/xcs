@@ -154,11 +154,11 @@ else:
         numpy = None
 
 
-from .conditions import bitstrings
+from .conditions.base import BitCondition
 from . import scenarios
 from .framework import ActionSet, ClassifierRule, ClassifierSet, LCSAlgorithm, MatchSet
 from .algorithms.xcs import XCSClassifierRule, XCSAlgorithm
-from .testing import test
+from .testing import test_online, test_offline
 
 
 __author__ = 'Aaron Hosford'
@@ -170,7 +170,7 @@ __all__ = [
     '__version__',
 
     # Preloaded Submodules
-    'bitstrings',
+    'conditions',
     'scenarios',
 
     # Classes
@@ -183,5 +183,6 @@ __all__ = [
     'MatchSet',
 
     # Functions
-    'test',
+    'test_online',
+    'test_offline',
 ]

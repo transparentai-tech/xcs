@@ -49,12 +49,12 @@ class TestBitCondition(unittest.TestCase):
     def test_bits(self):
         condition = BitCondition(self.bitstring1, self.bitstring2)
         self.assertTrue(condition(self.bitstring1))
-        self.assertTrue(condition.bits & self.bitstring1 == condition.bits)
+        self.assertTrue(condition.bounds & self.bitstring1 == condition.bounds)
 
     def test_mask(self):
         condition = BitCondition(self.bitstring3, self.bitstring1)
         self.assertTrue(condition.mask == self.bitstring1)
-        self.assertFalse(any(condition.bits & ~condition.mask))
+        self.assertFalse(any(condition.bounds & ~condition.mask))
 
     def test_count(self):
         condition = BitCondition(self.bitstring4, self.bitstring1)
@@ -62,15 +62,15 @@ class TestBitCondition(unittest.TestCase):
 
     def test_crossover_with(self):
         parent1 = BitCondition(self.bitstring1, self.bitstring3)
-        inbred1, inbred2 = parent1.crossover_with(parent1)
+        inbred1, inbred2 = parent1.cross_with(parent1)
         self.assertTrue(inbred1 == inbred2 == parent1)
 
         parent2 = BitCondition(self.bitstring4, self.bitstring3)
-        child1, child2 = parent1.crossover_with(parent2)
+        child1, child2 = parent1.cross_with(parent2)
         self.assertTrue(
             child1.mask == child2.mask == parent1.mask == parent2.mask
         )
-        self.assertFalse(child1.bits != ~child2.bits & child1.mask)
+        self.assertFalse(child1.bounds != ~child2.bounds & child1.mask)
 
     def test_bitwise_and(self):
         # Provided the two conditions have compatible bits, their
@@ -86,14 +86,14 @@ class TestBitCondition(unittest.TestCase):
         result = self.all_combos1 | self.all_combos2
         self.assertEqual(result, BitCondition('0###1####'))
         self.assertTrue(
-            result(self.all_combos1.bits | self.all_combos2.bits)
+            result(self.all_combos1.bounds | self.all_combos2.bounds)
         )
 
     def test_bitwise_invert(self):
         # Each unmasked bit gets inverted. The mask is unchanged.
         result = ~self.all_combos1
         self.assertEqual(result, BitCondition('111000###'))
-        self.assertTrue(result(~self.all_combos1.bits))
+        self.assertTrue(result(~self.all_combos1.bounds))
 
 
 def main():

@@ -1,12 +1,13 @@
 import random
-from abc import ABCMeta, abstractmethod
+from abc import abstractmethod, ABC
 from typing import Any
 
 from . import scenarios
-from .configurable import Configurable
+from .conditions.base import Condition
 
 
-class ActionSelectionStrategy(Configurable, metaclass=ABCMeta):
+class ActionSelectionStrategy(ABC):
+    # noinspection PyUnresolvedReferences
     """Abstract base class defining the minimal interface for action
     selection strategies. The action selection strategy is responsible for
     governing the trade-off between exploration (acquiring new experience)
@@ -34,7 +35,8 @@ class ActionSelectionStrategy(Configurable, metaclass=ABCMeta):
         raise NotImplementedError()
 
 
-class EpsilonGreedySelectionStrategy(ActionSelectionStrategy, Configurable):
+class EpsilonGreedySelectionStrategy(ActionSelectionStrategy):
+    # noinspection PyUnresolvedReferences
     """The epsilon-greedy action selection strategy. With probability
     epsilon, an action is chosen uniformly from all possible actions
     regardless of predicted payoff. The rest of the time, the action with
@@ -81,7 +83,7 @@ class EpsilonGreedySelectionStrategy(ActionSelectionStrategy, Configurable):
             return random.choice(best_actions)
 
 
-class ClassifierRule(Configurable, metaclass=ABCMeta):
+class ClassifierRule(ABC):
     """Abstract base class defining the minimal interface for classifier
     rules appearing in classifier sets. A classifier rule consists of a
     condition and an action taken as a pair, together with associated
@@ -149,7 +151,7 @@ class ClassifierRule(Configurable, metaclass=ABCMeta):
         raise NotImplementedError()
 
 
-class LCSAlgorithm(Configurable, metaclass=ABCMeta):
+class LCSAlgorithm(ABC):
     """Abstract base class defining the minimal interface for LCS
     algorithms. To create a new algorithm that can be used to initialize a
     ClassifierSet, inherit from this class and implement each of the
@@ -164,21 +166,14 @@ class LCSAlgorithm(Configurable, metaclass=ABCMeta):
     Init Arguments: n/a (See appropriate subclass.)
     """
 
-    def build_model(self, config: dict[str, Any]) -> 'ClassifierSet':
-        possible_actions = frozenset(config['possible_actions'])
-        model = ClassifierSet(self, possible_actions)
-        model.configure(config)
-        return model
-
-    def get_model_config(self, model: 'ClassifierSet') -> dict[str, Any]:
-        return model.get_configuration()
-
+    # def build_model(self, config: dict[str, Any]) -> 'ClassifierSet':
+    #     possible_actions = frozenset(config['possible_actions'])
+    #     model = ClassifierSet(self, possible_actions)
+    #     model.configure(config)
+    #     return model
+    #
     # def get_model_config(self, model: 'ClassifierSet') -> dict[str, Any]:
-    #     return dict(
-    #         algorithm=self.get_configuration(),
-    #         possible_actions=list(model.possible_actions),
-    #         rules=[self.get_rule_config(rule) for rule in model]
-    #     )
+    #     return model.get_configuration()
 
     @abstractmethod
     def build_rule(self, config: dict[str, Any]) -> 'ClassifierRule':
@@ -406,14 +401,14 @@ class ActionSet:
         assert all(
             isinstance(rule, ClassifierRule) and
             rule.condition == condition and
-            rule.condition(situation)
+            rule.condition.matches(situation)
             for condition, rule in rules.items()
         )
 
         self._model = model
         self._situation = situation
         self._action = action
-        self._rules = rules  # {condition: rule}
+        self._rules: dict[Condition, ClassifierRule] = rules  # {condition: rule}
 
         self._prediction = None  # We'll calculate this later as needed
         self._prediction_weight = None
@@ -551,7 +546,7 @@ class MatchSet:
             all matched.
         by_action: A 2-tiered dictionary of the form {action: {condition:
             rule}}, containing the classifier rules in this match set. The
-            the values of the inner dictionary should be ClassifierRule
+            values of the inner dictionary should be ClassifierRule
             instances, and for each of them,
                 assert by_action[rule.action][rule.condition] is rule
             should succeed.
@@ -690,6 +685,7 @@ class MatchSet:
             raise ValueError("The action has already been selected.")
         self._selected_action = action
 
+    # noinspection PyTypeChecker
     selected_action = property(
         _get_selected_action,
         _set_selected_action,
@@ -723,6 +719,7 @@ class MatchSet:
                              "been applied.")
         self._payoff = float(payoff)
 
+    # noinspection PyTypeChecker
     payoff = property(
         _get_payoff,
         _set_payoff,
@@ -792,7 +789,7 @@ class MatchSet:
         return self._closed
 
 
-class ClassifierSet(Configurable):
+class ClassifierSet:
     """A set of classifier rules which work together to collectively
     classify inputs provided to the classifier set. The classifier set
     represents the accumulated experience of the LCS algorithm with respect
@@ -817,24 +814,24 @@ class ClassifierSet(Configurable):
             classifier set.
     """
 
-    @classmethod
-    def build(cls, config: dict[str, Any]) -> 'ClassifierSet':
-        algorithm = LCSAlgorithm.build(config['algorithm'])
-        return algorithm.build_model(config)
-
-    def get_configuration(self) -> dict[str, Any]:
-        config = super().get_configuration()
-        config['possible_actions'] = list(self.possible_actions)
-        config['rules'] = [self.algorithm.get_rule_config(rule) for rule in self]
-        return config
-
-    def configure(self, config: dict[str, Any]) -> None:
-        assert len(self) == 0
-        assert self.possible_actions == frozenset(config['possible_actions'])
-        super().configure(config)
-        for rule_config in config['rules']:
-            rule = self.algorithm.build_rule(rule_config)
-            self.add(rule)
+    # @classmethod
+    # def build(cls, config: dict[str, Any]) -> 'ClassifierSet':
+    #     algorithm = LCSAlgorithm.build(config['algorithm'])
+    #     return algorithm.build_model(config)
+    #
+    # def get_configuration(self) -> dict[str, Any]:
+    #     config = super().get_configuration()
+    #     config['possible_actions'] = list(self.possible_actions)
+    #     config['rules'] = [self.algorithm.get_rule_config(rule) for rule in self]
+    #     return config
+    #
+    # def configure(self, config: dict[str, Any]) -> None:
+    #     assert len(self) == 0
+    #     assert self.possible_actions == frozenset(config['possible_actions'])
+    #     super().configure(config)
+    #     for rule_config in config['rules']:
+    #         rule = self.algorithm.build_rule(rule_config)
+    #         self.add(rule)
 
     def __init__(self, algorithm, possible_actions):
         assert isinstance(algorithm, LCSAlgorithm)
@@ -845,6 +842,9 @@ class ClassifierSet(Configurable):
         # situation exactly once, rather than repeatedly (once for each
         # unique occurrence in a classifier rule).
         self._population = {}
+
+        self._match_attempts = {}
+        self._match_probs = {}
 
         self._algorithm = algorithm
         self._possible_actions = frozenset(possible_actions)
@@ -873,6 +873,12 @@ class ClassifierSet(Configurable):
         assert value >= 0
         assert isinstance(value, int)
         self._time_stamp = value
+
+    def get_match_prob(self, condition, default=0.0):
+        return self._match_probs.get(condition, default)
+
+    def get_match_attempts(self, condition, default=0):
+        return self._match_attempts.get(condition, default)
 
     def __iter__(self):
         """Defining this determines the behavior of instances of this class
@@ -928,12 +934,30 @@ class ClassifierSet(Configurable):
             A MatchSet instance for the given situation, drawn from the
             classifier rules in this classifier set.
         """
+        # TODO: We can probably juice this for additional speed if we keep the conditions
+        #       organized hierarchically according to whether they generalize each other.
+        #       Then if the condition at the root of a branch fails to match, we can skip
+        #       testing matches for the entire subtree. To go even further with it, we
+        #       could implement condition subtraction, and only test the delta when one
+        #       condition specializes another. That is, if we have condition1 as '1#01'
+        #       and condition2 as `1101`, we actually only need to test bit index 1 for
+        #       condition2, i.e. '#1##', once we already know that condition1 matches.
+        #       That's because '1#01' & '#1##' == '1101'. FOLLOWUP: I've implemented a
+        #       delta() function in sparse_ops for condition subtraction towards this end.
 
         # Find the conditions that match against the current situation, and
         # group them according to which action(s) they recommend.
         by_action = {}
         for condition, actions in self._population.items():
-            if not condition(situation):
+            matches = condition.matches(situation)
+
+            # Update statistics on condition generality
+            match_prob = self._match_probs.get(condition, 0)
+            match_attempts = self._match_attempts.get(condition, 0) + 1
+            self._match_probs[condition] = match_prob + (matches - match_prob) / match_attempts
+            self._match_attempts[condition] = match_attempts
+
+            if not matches:
                 continue
 
             for action, rule in actions.items():
@@ -956,7 +980,7 @@ class ClassifierSet(Configurable):
             # Ensure that the condition provided by the algorithm does
             # indeed match the situation. If not, there is a bug in the
             # algorithm.
-            assert rule.condition(situation)
+            assert rule.condition.matches(situation), (str(rule.condition), str(situation))
 
             # Add the new classifier, getting back a list of the rule(s)
             # which had to be removed to make room for it.
@@ -1021,7 +1045,7 @@ class ClassifierSet(Configurable):
 
         # If the rule already exists in the population, then we virtually
         # add the rule by incrementing the existing rule's numerosity. This
-        # prevents redundancy in the rule set. Otherwise we capture the
+        # prevents redundancy in the rule set. Otherwise, we capture the
         # new rule.
         if condition not in self._population:
             self._population[condition] = {}
@@ -1073,6 +1097,9 @@ class ClassifierSet(Configurable):
             del self._population[rule.condition][rule.action]
             if not self._population[rule.condition]:
                 del self._population[rule.condition]
+                if rule.condition in self._match_probs:
+                    del self._match_probs[rule.condition]
+                    del self._match_attempts[rule.condition]
             return True
 
         return False
@@ -1155,7 +1182,7 @@ class ClassifierSet(Configurable):
 
             # Perform the selected action
             # and find out what the received reward was.
-            reward = scenario.execute(match_set.selected_action)
+            reward = scenario.execute(match_set.selected_action, match_set.prediction)
 
             # If the scenario is dynamic, don't immediately apply the
             # reward; instead, wait until the next iteration and factor in

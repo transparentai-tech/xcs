@@ -1,8 +1,8 @@
 import random
 from typing import Any, TypeVar, Hashable, Union, Generic
 
-from .. import bitstrings
-from ..conditions.base import Vector, VectorCondition
+from vectorface import Vector, BoolVector
+from ..conditions.base import Condition, BitCondition
 from ..framework import ClassifierRule, LCSAlgorithm, EpsilonGreedySelectionStrategy, MatchSet, ClassifierSet, \
     ActionSelectionStrategy, ActionSet
 
@@ -375,8 +375,10 @@ class XCSAlgorithm(LCSAlgorithm, Generic[_Value]):
     # parameter and should be set to 0 in that case.
     idealization_factor = 0
 
-    situation_type: type[Vector[_Value]] = bitstrings.BitString
-    condition_type: type[VectorCondition[_Value]] = bitstrings.BitCondition
+    crossover_params: None | dict[str, Any] = None
+
+    situation_type: type[Vector[_Value]] = BoolVector
+    condition_type: type[Condition[_Value]] = BitCondition
 
     def build_rule(self, config: dict[str, Any]) -> 'XCSClassifierRule':
         condition = self.condition_type.build(config['condition'])
@@ -483,7 +485,7 @@ class XCSAlgorithm(LCSAlgorithm, Generic[_Value]):
         # Create a new condition that matches the situation.
         condition = self.condition_type.cover(
             match_set.situation,
-            self.wildcard_probability
+            wildcard_prob=self.wildcard_probability
         )
 
         # Pick a random action that (preferably) isn't already suggested by
@@ -616,7 +618,8 @@ class XCSAlgorithm(LCSAlgorithm, Generic[_Value]):
         # crossover operator to the parents. Otherwise, just take the
         # parents unchanged.
         if random.random() < self.crossover_probability:
-            condition1, condition2 = parent1.condition.crossover_with(parent2.condition)
+            condition1, condition2 = parent1.condition.cross_with(parent2.condition,
+                                                                  **(self.crossover_params or {}))
         else:
             condition1, condition2 = parent1.condition, parent2.condition
 
@@ -638,10 +641,9 @@ class XCSAlgorithm(LCSAlgorithm, Generic[_Value]):
                 subsumed = False
                 for parent in parent1, parent2:
                     should_subsume = (
-                        (parent.experience >
-                         self.subsumption_threshold) and
+                        (parent.experience > self.subsumption_threshold) and
                         parent.error < self.error_threshold and
-                        parent.condition(condition)
+                        parent.condition.generalizes(condition)
                     )
                     if should_subsume:
                         if parent in action_set.model:
@@ -798,23 +800,23 @@ class XCSAlgorithm(LCSAlgorithm, Generic[_Value]):
 
     def _action_set_subsumption(self, action_set: ActionSet) -> None:
         """Perform action set subsumption."""
-        # Select a condition with maximum bit count among those having
+        # Select a condition with maximum specificity among those having
         # sufficient experience and sufficiently low error.
         selected_rules = []
-        selected_specificity = None
+        selected_match_prob = 1.0
         for rule in action_set:
             if not (rule.experience > self.subsumption_threshold and
                     rule.error < self.error_threshold):
                 continue
-            specificity = rule.condition.specificity()
-            if not selected_rules or specificity > selected_specificity:
+            match_prob = action_set.model.get_match_prob(rule.condition)
+            assert 0.0 <= match_prob <= 1.0, match_prob
+            if not selected_rules or match_prob < selected_match_prob:
                 selected_rules.append(rule)
-                selected_specificity = specificity
-            elif specificity == selected_specificity:
+                selected_match_prob = match_prob
+            elif match_prob == selected_match_prob:
                 selected_rules.append(rule)
 
-        # If no rule was found satisfying the requirements, return
-        # early.
+        # If no rule was found satisfying the requirements, return early.
         if not selected_rules:
             return
 
@@ -826,7 +828,7 @@ class XCSAlgorithm(LCSAlgorithm, Generic[_Value]):
         to_remove = []
         for rule in action_set:
             if (selected_rule is not rule and
-                    selected_rule.condition(rule.condition)):
+                    selected_rule.condition.generalizes(rule.condition)):
                 selected_rule.numerosity += rule.numerosity
                 action_set.model.discard(rule, rule.numerosity)
                 to_remove.append(rule)
@@ -867,13 +869,13 @@ class XCSAlgorithm(LCSAlgorithm, Generic[_Value]):
         # due to floating point error, we fall back on uniform selection.
         return random.choice(list(action_set))
 
-    def _mutate(self, condition: VectorCondition[_Value],
-                situation: Union[VectorCondition[_Value], Vector[_Value]]) -> VectorCondition[_Value]:
+    def _mutate(self, condition: Condition[_Value],
+                situation: Union[Condition[_Value], Vector[_Value]]) -> Condition[_Value]:
         """Create a new condition from the given one by probabilistically
         applying point-wise mutations. Bits that were originally wildcarded
         in the parent condition acquire their values from the provided
         situation, to ensure the child condition continues to match it."""
-        result = condition.mutate(situation, self.mutation_probability)
+        result = condition.mutate(situation=situation, mutation_probability=self.mutation_probability)
         assert isinstance(result, self.condition_type)
         return result
 

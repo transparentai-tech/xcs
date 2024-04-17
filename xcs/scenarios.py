@@ -40,8 +40,8 @@ environment and act upon it, building up models as they proceed.
 
 If you wish to create a scenario of your own, subclass the Scenario class
 and define the appropriate methods. To add logging to an existing scenario,
-wrap your scenario in a ScenarioObserver. To treat non-interactive, pre-
-collected data as a scenario, use PreClassifiedData for training and
+wrap your scenario in a ScenarioObserver. To treat non-interactive,
+pre-collected data as a scenario, use PreClassifiedData for training and
 testing, or UnclassifiedData for prediction. To get a full listing of the
 classes provided by this module and see documentation on their appropriate
 usage, use "help(xcs.scenarios)".
@@ -93,9 +93,9 @@ __all__ = [
 import logging
 import random
 from abc import ABCMeta, abstractmethod
+from typing import Hashable
 
-from . import numpy
-from . import bitstrings
+from vectorface import Vector
 
 
 class Scenario(metaclass=ABCMeta):
@@ -111,6 +111,11 @@ class Scenario(metaclass=ABCMeta):
 
     Init Arguments: n/a (See appropriate subclass.)
     """
+
+    @property
+    @abstractmethod
+    def situation_value_type(self) -> type[Hashable]:
+        raise NotImplementedError()
 
     @property
     @abstractmethod
@@ -163,7 +168,7 @@ class Scenario(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def execute(self, action):
+    def execute(self, action, prediction):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -173,6 +178,7 @@ class Scenario(metaclass=ABCMeta):
 
         Arguments:
             action: The action to be executed within the current situation.
+            prediction: The predicted reward for this action.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -230,6 +236,10 @@ class MUXProblem(Scenario):
         self.remaining_cycles = training_cycles
 
     @property
+    def situation_value_type(self) -> type[Hashable]:
+        return bool
+
+    @property
     def is_dynamic(self):
         """A Boolean value indicating whether earlier actions from the same
         run can affect the rewards or outcomes of later actions."""
@@ -273,13 +283,10 @@ class MUXProblem(Scenario):
         Return:
             The current situation.
         """
-        self.current_situation = bitstrings.BitString([
-            bool(random.randrange(2))
-            for _ in range(self.address_size + (1 << self.address_size))
-        ])
+        self.current_situation = Vector.sample_uniform(bool, self.address_size + (1 << self.address_size))
         return self.current_situation
 
-    def execute(self, action):
+    def execute(self, action, prediction):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -289,6 +296,7 @@ class MUXProblem(Scenario):
 
         Arguments:
             action: The action to be executed within the current situation.
+            prediction: The predicted reward for this action.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -297,9 +305,10 @@ class MUXProblem(Scenario):
         assert action in self.possible_actions
 
         self.remaining_cycles -= 1
-        index = int(bitstrings.BitString(
-            self.current_situation[:self.address_size]
-        ))
+        index = 0
+        for bit in self.current_situation[:self.address_size]:
+            index <<= 1
+            index |= bit
         bit = self.current_situation[self.address_size + index]
         return action == bit
 
@@ -350,6 +359,10 @@ class HaystackProblem(Scenario):
         self.needle_value = None
 
     @property
+    def situation_value_type(self) -> type[Hashable]:
+        return bool
+
+    @property
     def is_dynamic(self):
         """A Boolean value indicating whether earlier actions from the same
         run can affect the rewards or outcomes of later actions."""
@@ -394,11 +407,11 @@ class HaystackProblem(Scenario):
         Return:
             The current situation.
         """
-        haystack = bitstrings.BitString.random(self.input_size)
+        haystack = Vector.sample_uniform(bool, self.input_size)
         self.needle_value = haystack[self.needle_index]
         return haystack
 
-    def execute(self, action):
+    def execute(self, action, prediction):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -408,6 +421,7 @@ class HaystackProblem(Scenario):
 
         Arguments:
             action: The action to be executed within the current situation.
+            prediction: The predicted reward for this action.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -448,14 +462,27 @@ class ScenarioObserver(Scenario):
         wrapped: The Scenario instance to be observed.
     """
 
-    def __init__(self, wrapped):
+    def __init__(self, wrapped, model=None, tracked_attributes=None, scenario_name: str = None):
         # Ensure that the wrapped object implements the same interface
         assert isinstance(wrapped, Scenario)
 
         self.logger = logging.getLogger(__name__)
         self.wrapped = wrapped
         self.total_reward = 0
+        self.total_reward_per = dict.fromkeys(self.wrapped.get_possible_actions(), 0)
+        self.expected_total_abs_error = 0
+        self.expected_total_abs_error_per = dict.fromkeys(self.wrapped.get_possible_actions(), 0)
+        self.total_abs_error = 0
+        self.total_abs_error_per = dict.fromkeys(self.wrapped.get_possible_actions(), 0)
         self.steps = 0
+        self.steps_per = dict.fromkeys(self.wrapped.get_possible_actions(), 0)
+        self.model = model
+        self.tracked_attributes = tracked_attributes
+        self.scenario_name = scenario_name
+
+    @property
+    def situation_value_type(self) -> type[Hashable]:
+        return self.wrapped.situation_value_type
 
     @property
     def is_dynamic(self):
@@ -500,7 +527,7 @@ class ScenarioObserver(Scenario):
 
         return possible_actions
 
-    def reset(self):
+    def reset(self, reset_stats: bool = False):
         """Reset the scenario, starting it over for a new run.
 
         Usage:
@@ -512,6 +539,15 @@ class ScenarioObserver(Scenario):
         """
         self.logger.info('Resetting scenario.')
         self.wrapped.reset()
+        if reset_stats:
+            self.total_reward = 0
+            self.total_reward_per = dict.fromkeys(self.wrapped.get_possible_actions(), 0)
+            self.expected_total_abs_error = 0
+            self.expected_total_abs_error_per = dict.fromkeys(self.wrapped.get_possible_actions(), 0)
+            self.total_abs_error = 0
+            self.total_abs_error_per = dict.fromkeys(self.wrapped.get_possible_actions(), 0)
+            self.steps = 0
+            self.steps_per = dict.fromkeys(self.wrapped.get_possible_actions(), 0)
 
     def sense(self):
         """Return a situation, encoded as a bit string, which represents
@@ -531,7 +567,7 @@ class ScenarioObserver(Scenario):
 
         return situation
 
-    def execute(self, action):
+    def execute(self, action, prediction):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -541,6 +577,7 @@ class ScenarioObserver(Scenario):
 
         Arguments:
             action: The action to be executed within the current situation.
+            prediction: The predicted reward for this action.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -548,15 +585,26 @@ class ScenarioObserver(Scenario):
 
         self.logger.debug('Executing action: %s', action)
 
-        reward = self.wrapped.execute(action)
-        if reward:
-            self.total_reward += reward
+        reward = self.wrapped.execute(action, prediction)
+        self.total_reward += reward
+        self.total_reward_per[action] += reward
+
+        abs_error = abs(reward - prediction)
+        self.total_abs_error += abs_error
+        self.total_abs_error_per[action] += abs_error
+
         self.steps += 1
+        self.steps_per[action] += 1
+
+        self.expected_total_abs_error += abs(reward - self.total_reward / self.steps)
+        self.expected_total_abs_error_per[action] += abs(reward - self.total_reward_per[action] / self.steps_per[action])
 
         self.logger.debug('Reward received on this step: %.5f',
                           reward or 0)
         self.logger.debug('Average reward per step: %.5f',
                           self.total_reward / self.steps)
+        self.logger.debug('Average abs error per step: %.5f',
+                          self.total_abs_error / self.steps)
 
         return reward
 
@@ -576,11 +624,70 @@ class ScenarioObserver(Scenario):
             current run.
         """
         more = self.wrapped.more()
+        if not self.logger.isEnabledFor(logging.INFO):
+            return more
 
         if not self.steps % 100:
+            if self.scenario_name:
+                self.logger.info("Running %s", self.scenario_name)
+            for action in self.wrapped.get_possible_actions():
+                self.logger.info('Action %s:', action)
+                self.logger.info('    Steps completed: %d', self.steps_per[action])
+                self.logger.info('    Average reward per step: %.5f',
+                                 self.total_reward_per[action] / (self.steps_per[action] or 1))
+                self.logger.info('    Average abs error per step: %.5f',
+                                 self.total_abs_error_per[action] / (self.steps_per[action] or 1))
+                self.logger.info('    Expected abs error per step: %.5f',
+                                 self.expected_total_abs_error_per[action] / (self.steps_per[action] or 1))
+                self.logger.info('    Improvement over baseline: %.5f',
+                                 -(self.total_abs_error_per[action] - self.expected_total_abs_error_per[action]) /
+                                 (self.steps_per[action] or 1))
+
             self.logger.info('Steps completed: %d', self.steps)
             self.logger.info('Average reward per step: %.5f',
                              self.total_reward / (self.steps or 1))
+            self.logger.info('Average abs error per step: %.5f',
+                             self.total_abs_error / (self.steps or 1))
+            self.logger.info('Expected average abs error per step: %.5f',
+                             self.expected_total_abs_error / (self.steps or 1))
+            self.logger.info('Improvement over baseline: %.5f',
+                             -(self.total_abs_error - self.expected_total_abs_error) / (self.steps or 1))
+
+            if self.model is not None:
+                self.logger.info('Population size: %d', len(self.model))
+                if self.tracked_attributes:
+                    tracked_attributes = set(self.tracked_attributes)
+                else:
+                    for rule in self.model:
+                        tracked_attributes = {name for name in dir(rule)
+                                              if isinstance(getattr(rule, name), (bool, int, float))}
+                        break
+                    else:
+                        tracked_attributes = ()
+                for name in sorted(tracked_attributes):
+                    try:
+                        minimum = min(getattr(rule, name) for rule in self.model)
+                        maximum = max(getattr(rule, name) for rule in self.model)
+                        total = sum(getattr(rule, name) for rule in self.model)
+                        mean = total / len(self.model)
+                        stddev = (sum((getattr(rule, name) - mean) ** 2 for rule in self.model) / len(self.model)) ** .5
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    self.logger.info('Rule %s: min=%.5f max=%.5f mean=%.5f stddev=%.5f total=%.5f',
+                                     name, minimum, maximum, mean, stddev, total)
+                try:
+                    minimum = min(self.model.get_match_prob(rule.condition) for rule in self.model)
+                    maximum = max(self.model.get_match_prob(rule.condition) for rule in self.model)
+                    total = sum(self.model.get_match_prob(rule.condition) for rule in self.model)
+                    mean = total / len(self.model)
+                    stddev = (sum((self.model.get_match_prob(rule.condition) - mean) ** 2
+                                  for rule in self.model) / len(self.model)) ** .5
+                except (TypeError, ValueError, AttributeError):
+                    pass
+                else:
+                    self.logger.info('Rule match prob: min=%.5f max=%.5f mean=%.5f stddev=%.5f total=%.5f',
+                                     minimum, maximum, mean, stddev, total)
+
         if not more:
             self.logger.info('Run completed.')
             self.logger.info('Total steps: %d', self.steps)
@@ -648,30 +755,14 @@ class PreClassifiedData(Scenario):
             actual is the target and 0.0 otherwise.
     """
 
-    def __init__(self, situations, classifications, reward_function=None):
-        if (bitstrings.using_numpy() and
-                isinstance(situations, numpy.ndarray)):
-            self.situations = []
-            for situation_bits in situations:
-                # This doesn't affect the original situations array.
-                situation_bits.setflags(write=False)
-                situation = bitstrings.BitString(situation_bits)
-                self.situations.append(situation)
-        else:
-            self.situations = [
-                bitstrings.BitString(situation_bits)
-                for situation_bits in situations
-            ]
-
-        if (isinstance(classifications, (list, tuple)) or
-                (bitstrings.using_numpy() and
-                 isinstance(classifications, numpy.ndarray))):
-            self.classifications = classifications
-        else:
-            self.classifications = list(classifications)
+    def __init__(self, situations, classifications, reward_function=None, x_value_type: type[Hashable] = bool,
+                 shuffle: bool = True):
+        self.situations = [Vector.new(x_value_type, situation) for situation in situations]
+        self.classifications = list(classifications)
 
         assert len(self.situations) == len(self.classifications)
 
+        self._situation_value_type = x_value_type
         self.reward_function = (
             reward_function or
             (lambda actual, target: float(actual == target))
@@ -679,6 +770,15 @@ class PreClassifiedData(Scenario):
         self.possible_actions = set(self.classifications)
         self.steps = 0
         self.total_reward = 0
+        self.shuffle = shuffle
+        self.order = range(len(self.situations))
+        if shuffle:
+            self.order = list(self.order)
+            random.shuffle(self.order)
+
+    @property
+    def situation_value_type(self) -> type[Hashable]:
+        return self._situation_value_type
 
     @property
     def is_dynamic(self):
@@ -712,6 +812,8 @@ class PreClassifiedData(Scenario):
         """
         self.steps = 0
         self.total_reward = 0
+        if self.shuffle:
+            random.shuffle(self.order)
 
     def sense(self):
         """Return a situation, encoded as a bit string, which represents
@@ -725,9 +827,9 @@ class PreClassifiedData(Scenario):
         Return:
             The current situation.
         """
-        return self.situations[self.steps]
+        return self.situations[self.order[self.steps]]
 
-    def execute(self, action):
+    def execute(self, action, prediction):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -737,13 +839,14 @@ class PreClassifiedData(Scenario):
 
         Arguments:
             action: The action to be executed within the current situation.
+            prediction: The predicted reward for this action.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
         """
         reward = self.reward_function(
             action,
-            self.classifications[self.steps]
+            self.classifications[self.order[self.steps]]
         )
         self.total_reward += reward
         self.steps += 1
@@ -784,20 +887,8 @@ class UnclassifiedData(Scenario):
             which the model might generate.
     """
 
-    def __init__(self, situations, possible_actions=None):
-        if (bitstrings.using_numpy() and
-                isinstance(situations, numpy.ndarray)):
-            self.situations = []
-            for situation_bits in situations:
-                # This doesn't affect the original situations array.
-                situation_bits.setflags(write=False)
-                situation = bitstrings.BitString(situation_bits)
-                self.situations.append(situation)
-        else:
-            self.situations = [
-                bitstrings.BitString(situation_bits)
-                for situation_bits in situations
-            ]
+    def __init__(self, situations, possible_actions=None, x_value_type: type[Hashable] = bool):
+        self.situations = [Vector.new(x_value_type, situation) for situation in situations]
 
         if possible_actions is None:
             self.possible_actions = None
@@ -805,6 +896,13 @@ class UnclassifiedData(Scenario):
             self.possible_actions = frozenset(possible_actions)
         self.steps = 0
         self.classifications = []
+
+        # TODO: Support other types. See PreClassifiedData.__init__
+        self._situation_value_type = bool
+
+    @property
+    def situation_value_type(self) -> type[Hashable]:
+        return self._situation_value_type
 
     @property
     def is_dynamic(self):
@@ -860,7 +958,7 @@ class UnclassifiedData(Scenario):
         """
         return self.situations[self.steps]
 
-    def execute(self, action):
+    def execute(self, action, prediction):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -870,6 +968,7 @@ class UnclassifiedData(Scenario):
 
         Arguments:
             action: The action to be executed within the current situation.
+            prediction: The predicted reward for this action.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -909,7 +1008,29 @@ class UnclassifiedData(Scenario):
             the model for each situation, in the same order as the original
             situations themselves appear.
         """
-        if bitstrings.using_numpy():
-            return numpy.array(self.classifications)
-        else:
-            return self.classifications
+        return self.classifications
+
+
+class EMNIST(PreClassifiedData):
+
+    def __init__(self, images=None, labels=None, reward_function=None, shuffle=True, train=True):
+        import numpy as np
+        if images is None or isinstance(images, str) or labels is None:
+            assert images is None or isinstance(images, str)
+            assert labels is None
+            if images is None:
+                images = 'mnist'
+            import emnist
+            if train:
+                images, labels = emnist.extract_training_samples(images)
+            else:
+                images, labels = emnist.extract_test_samples(images)
+        images = np.asarray(images, dtype=np.uint8) / 255.0
+        labels = np.asarray(labels, dtype=np.uint8)
+        images = images.reshape((len(images), images.size // len(images)))
+        if shuffle:
+            indices = np.arange(len(images))
+            np.random.shuffle(indices)
+            images = images[indices]
+            labels = labels[indices]
+        super().__init__(images, labels, reward_function, x_value_type=float)
