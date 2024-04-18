@@ -86,6 +86,7 @@ __all__ = [
     'MUXProblem',
     'Scenario',
     'ScenarioObserver',
+    'ScenarioHistoryTracker',
     'PreClassifiedData',
     'UnclassifiedData',
 ]
@@ -93,8 +94,10 @@ __all__ = [
 import logging
 import random
 from abc import ABCMeta, abstractmethod
+from dataclasses import dataclass
 from typing import Hashable
 
+import xcs.framework as framework
 from vectorface import Vector
 
 
@@ -168,7 +171,7 @@ class Scenario(metaclass=ABCMeta):
         raise NotImplementedError()
 
     @abstractmethod
-    def execute(self, action, prediction):
+    def execute(self, action, prediction, explanation):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -179,6 +182,7 @@ class Scenario(metaclass=ABCMeta):
         Arguments:
             action: The action to be executed within the current situation.
             prediction: The predicted reward for this action.
+            explanation: The classifier rule that contributed most to the prediction.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -286,7 +290,7 @@ class MUXProblem(Scenario):
         self.current_situation = Vector.sample_uniform(bool, self.address_size + (1 << self.address_size))
         return self.current_situation
 
-    def execute(self, action, prediction):
+    def execute(self, action, prediction, explanation):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -297,6 +301,7 @@ class MUXProblem(Scenario):
         Arguments:
             action: The action to be executed within the current situation.
             prediction: The predicted reward for this action.
+            explanation: The classifier rule that contributed most to the prediction.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -411,7 +416,7 @@ class HaystackProblem(Scenario):
         self.needle_value = haystack[self.needle_index]
         return haystack
 
-    def execute(self, action, prediction):
+    def execute(self, action, prediction, explanation):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -422,6 +427,7 @@ class HaystackProblem(Scenario):
         Arguments:
             action: The action to be executed within the current situation.
             prediction: The predicted reward for this action.
+            explanation: The classifier rule that contributed most to the prediction.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -567,7 +573,7 @@ class ScenarioObserver(Scenario):
 
         return situation
 
-    def execute(self, action, prediction):
+    def execute(self, action, prediction, explanation):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -578,6 +584,7 @@ class ScenarioObserver(Scenario):
         Arguments:
             action: The action to be executed within the current situation.
             prediction: The predicted reward for this action.
+            explanation: The classifier rule that contributed most to the prediction.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -585,7 +592,7 @@ class ScenarioObserver(Scenario):
 
         self.logger.debug('Executing action: %s', action)
 
-        reward = self.wrapped.execute(action, prediction)
+        reward = self.wrapped.execute(action, prediction, explanation)
         self.total_reward += reward
         self.total_reward_per[action] += reward
 
@@ -597,7 +604,8 @@ class ScenarioObserver(Scenario):
         self.steps_per[action] += 1
 
         self.expected_total_abs_error += abs(reward - self.total_reward / self.steps)
-        self.expected_total_abs_error_per[action] += abs(reward - self.total_reward_per[action] / self.steps_per[action])
+        self.expected_total_abs_error_per[action] += \
+            abs(reward - self.total_reward_per[action] / self.steps_per[action])
 
         self.logger.debug('Reward received on this step: %.5f',
                           reward or 0)
@@ -697,6 +705,129 @@ class ScenarioObserver(Scenario):
                              self.total_reward / (self.steps or 1))
 
         return more
+
+
+@dataclass
+class HistoryEntry:
+    situation: Hashable
+    action: Hashable = None
+    prediction: float = None
+    explanation: framework.ClassifierRule = None
+
+
+class ScenarioHistoryTracker(Scenario):
+    """Wrapper for other Scenario instances which captures details of the
+    agent/scenario interaction as they take place, forwarding the actual
+    work on to the wrapped instance.
+
+    Usage:
+        model = algorithm.run(ScenarioHistory(scenario))
+
+    Input Args:
+        wrapped: The Scenario instance to be observed.
+    """
+
+    def __init__(self, wrapped: Scenario):
+        # Ensure that the wrapped object implements the same interface
+        assert isinstance(wrapped, Scenario)
+        self.wrapped: Scenario = wrapped
+        self.completed_epochs: list[list[HistoryEntry]] = []
+        self.current_epoch: list[HistoryEntry] = []
+
+    @property
+    def situation_value_type(self) -> type[Hashable]:
+        return self.wrapped.situation_value_type
+
+    @property
+    def is_dynamic(self):
+        """A Boolean value indicating whether earlier actions from the same
+        run can affect the rewards or outcomes of later actions."""
+        return self.wrapped.is_dynamic
+
+    def get_possible_actions(self):
+        """Return a sequence containing the possible actions that can be
+        executed within the environment.
+
+        Usage:
+            possible_actions = scenario.get_possible_actions()
+
+        Arguments: None
+        Return:
+            A sequence containing the possible actions which can be
+            executed within this scenario.
+        """
+        return self.wrapped.get_possible_actions()
+
+    def reset(self, reset_stats: bool = False):
+        """Reset the scenario, starting it over for a new run.
+
+        Usage:
+            if not scenario.more():
+                scenario.reset()
+
+        Arguments: None
+        Return: None
+        """
+        if self.current_epoch:
+            self.completed_epochs.append(self.current_epoch)
+            self.current_epoch = []
+        self.wrapped.reset()
+
+    def sense(self):
+        """Return a situation, encoded as a bit string, which represents
+        the observable state of the environment.
+
+        Usage:
+            situation = scenario.sense()
+            assert isinstance(situation, BitString)
+
+        Arguments: None
+        Return:
+            The current situation.
+        """
+        situation = self.wrapped.sense()
+        self.current_epoch.append(HistoryEntry(situation))
+        return situation
+
+    def execute(self, action, prediction, explanation):
+        """Execute the indicated action within the environment and
+        return the resulting immediate reward dictated by the reward
+        program.
+
+        Usage:
+            immediate_reward = scenario.execute(selected_action)
+
+        Arguments:
+            action: The action to be executed within the current situation.
+            prediction: The predicted reward for this action.
+            explanation: The classifier rule that contributed most to the prediction.
+        Return:
+            A float, the reward received for the action that was executed,
+            or None if no reward is offered.
+        """
+        entry = self.current_epoch[-1]
+        entry.action = action
+        entry.prediction = prediction
+        entry.explanation = explanation
+        entry.reward = self.wrapped.execute(action, prediction, explanation)
+        return entry.reward
+
+    def more(self):
+        """Return a Boolean indicating whether additional actions may be
+        executed, per the reward program.
+
+        Usage:
+            while scenario.more():
+                situation = scenario.sense()
+                selected_action = choice(possible_actions)
+                reward = scenario.execute(selected_action)
+
+        Arguments: None
+        Return:
+            A bool indicating whether additional situations remain in the
+            current run.
+        """
+        return self.wrapped.more()
 
 
 class PreClassifiedData(Scenario):
@@ -829,7 +960,7 @@ class PreClassifiedData(Scenario):
         """
         return self.situations[self.order[self.steps]]
 
-    def execute(self, action, prediction):
+    def execute(self, action, prediction, explanation):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -840,6 +971,7 @@ class PreClassifiedData(Scenario):
         Arguments:
             action: The action to be executed within the current situation.
             prediction: The predicted reward for this action.
+            explanation: The classifier rule that contributed most to the prediction.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.
@@ -958,7 +1090,7 @@ class UnclassifiedData(Scenario):
         """
         return self.situations[self.steps]
 
-    def execute(self, action, prediction):
+    def execute(self, action, prediction, explanation):
         """Execute the indicated action within the environment and
         return the resulting immediate reward dictated by the reward
         program.
@@ -969,6 +1101,7 @@ class UnclassifiedData(Scenario):
         Arguments:
             action: The action to be executed within the current situation.
             prediction: The predicted reward for this action.
+            explanation: The classifier rule that contributed most to the prediction.
         Return:
             A float, the reward received for the action that was executed,
             or None if no reward is offered.

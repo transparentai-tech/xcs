@@ -162,7 +162,7 @@ from .testing import test_online, test_offline
 
 
 __author__ = 'Aaron Hosford'
-__version__ = '1.0.0'
+__version__ = '2.0.0'
 
 __all__ = [
     # Module Metadata

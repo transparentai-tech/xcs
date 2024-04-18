@@ -25,7 +25,7 @@ finally:
 
 os.system('python setup.py sdist bdist_wheel')
 
-with open('xcs.egg-info/PKG-INFO', encoding='utf-8', mode='rU') as infile:
+with open('xcs.egg-info/PKG-INFO', encoding='utf-8', mode='r') as infile:
     with open('xcs.egg-info/PKG-INFO-FIXED',
               encoding='utf-8',
               mode='w') as outfile:

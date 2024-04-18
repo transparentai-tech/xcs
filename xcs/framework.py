@@ -1,3 +1,4 @@
+import math
 import random
 from abc import abstractmethod, ABC
 from typing import Any
@@ -410,7 +411,9 @@ class ActionSet:
         self._action = action
         self._rules: dict[Condition, ClassifierRule] = rules  # {condition: rule}
 
-        self._prediction = None  # We'll calculate this later as needed
+        # We'll calculate this later as needed
+        self._prediction = None
+        self._explanation = None
         self._prediction_weight = None
 
         # Capture the time stamp of the model at which the action set was
@@ -462,12 +465,19 @@ class ActionSet:
         Return: None
         """
         total_weight = 0
-        total_prediction = 0
+        total_contributions = 0
+        max_contribution = -math.inf
+        max_contributor = None
         for rule in self._rules.values():
+            contribution = rule.prediction * rule.prediction_weight
+            if contribution > max_contribution or (contribution == max_contribution and
+                                                   rule.numerosity > max_contributor.numerosity):
+                max_contribution = contribution
+                max_contributor = rule
+            total_contributions += contribution
             total_weight += rule.prediction_weight
-            total_prediction += (rule.prediction *
-                                 rule.prediction_weight)
-        self._prediction = total_prediction / (total_weight or 1)
+        self._prediction = total_contributions / (total_weight or 1)
+        self._explanation = max_contributor
         self._prediction_weight = total_weight
 
     @property
@@ -479,6 +489,12 @@ class ActionSet:
         if self._prediction is None:
             self._compute_prediction()
         return self._prediction
+
+    @property
+    def explanation(self):
+        if self._prediction is None:
+            self._compute_prediction()
+        return self._explanation
 
     @property
     def prediction_weight(self):
@@ -705,6 +721,12 @@ class MatchSet:
         if self._selected_action is None:
             return None
         return self._action_sets[self._selected_action].prediction
+
+    @property
+    def explanation(self) -> ClassifierRule | None:
+        if self._selected_action is None or self.prediction < self.best_prediction:
+            return None
+        return self._action_sets[self._selected_action].explanation
 
     def _get_payoff(self):
         """Getter method for the payoff property."""
@@ -1143,7 +1165,7 @@ class ClassifierSet:
         """
         self._time_stamp += 1
 
-    def run(self, scenario, learn=True):
+    def run(self, scenario: 'scenarios.Scenario', learn: bool = True):
         """Run the algorithm, utilizing the classifier set to choose the
         most appropriate action for each situation produced by the
         scenario. If learn is True, improve the situation/action mapping to
@@ -1182,7 +1204,7 @@ class ClassifierSet:
 
             # Perform the selected action
             # and find out what the received reward was.
-            reward = scenario.execute(match_set.selected_action, match_set.prediction)
+            reward = scenario.execute(match_set.selected_action, match_set.prediction, match_set.explanation)
 
             # If the scenario is dynamic, don't immediately apply the
             # reward; instead, wait until the next iteration and factor in
