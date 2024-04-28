@@ -73,7 +73,7 @@ setup(
     ],
 
     keywords='xcs accuracy classifier lcs reinforcement machine learning',
-    packages=['xcs', 'xcs.algorithms'],
+    packages=['xcs', 'xcs.algorithms', 'xcs.conditions'],
     install_requires=[
         'vectorface @ git+ssh://git@github.com/transparentai-tech/VectorFace.git@main'
         ],
