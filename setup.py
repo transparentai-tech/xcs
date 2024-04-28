@@ -76,8 +76,7 @@ setup(
 
     keywords='xcs accuracy classifier lcs reinforcement machine learning',
     packages=['xcs', 'xcs.algorithms'],
-    install_requires=['vectorface'],
-
+    dependency_links=['https://github.com/transparentai-tech/VectorFace.git'],
     test_suite="tests",
     tests_require=["numpy"],
 )
