@@ -9,7 +9,8 @@ from setuptools import setup
 from codecs import open
 from os import path
 
-from xcs import __version__
+# from xcs import __version__
+__version__ = '2.0.0'
 
 here = path.abspath(path.dirname(__file__))
 
@@ -75,8 +76,8 @@ setup(
     ],
 
     keywords='xcs accuracy classifier lcs reinforcement machine learning',
-    packages=['xcs', 'xcs.algorithms'],
-    # install_requires=['numpy'],  # No longer required
+    packages=['xcs', 'xcs.algorithms', 'xcs.conditions'],
+    install_requires=['vectorface @ git+https://github.com/transparentai-tech/VectorFace.git'],  # No longer required
 
     test_suite="tests",
     tests_require=["numpy"],
